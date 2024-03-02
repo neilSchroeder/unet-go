@@ -90,3 +90,8 @@ func (unet *Unet) Forward(input *mat64.Dense) *mat64.Dense {
 	return input
 
 }
+
+// Backward performs a backward pass through the U-Net model
+func (unet *Unet) Backward(input *mat64.Dense) *mat64.Dense {
+
+}
