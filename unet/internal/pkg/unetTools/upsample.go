@@ -41,3 +41,8 @@ func (ul *UpsampleLayer) Forward(input *mat64.Dense) *mat64.Dense {
 
 	return output
 }
+
+// Backward performs a backward pass through the UpsampleLayer
+func (ul *UpsampleLayer) Backward(gradOutput *mat64.Dense) *mat64.Dense {
+	return gradOutput
+}

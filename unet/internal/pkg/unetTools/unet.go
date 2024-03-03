@@ -1,7 +1,6 @@
 package unetTools
 
 import (
-	"math"
 	"slices"
 
 	"github.com/gonum/matrix/mat64"
@@ -22,9 +21,9 @@ type Unet struct {
 	activation    string // Activation function
 	kernelSize    int    // Size of convolutional kernel
 
-	encoders     []*Encoder
-	middle_layer *ConvLayer
-	decoders     []*Decoder
+	encoders   []*Encoder
+	bottleneck *Decoder
+	decoders   []*Decoder
 }
 
 // NewUnet initializes a new instance of Unet
@@ -37,6 +36,16 @@ func NewUnet(
 	kernelSize int,
 ) *Unet {
 
+	cl_params := ConvParams{
+		activation,
+		inputChannels,
+		kernelSize,
+		maxNumFilters,
+		0.9,
+		0.999,
+		1e-8,
+	}
+
 	unet := &Unet{
 		inputSize:     inputSize,
 		inputChannels: inputChannels,
@@ -45,53 +54,73 @@ func NewUnet(
 		activation:    activation,
 		kernelSize:    kernelSize,
 
-		encoders:     make([]*Encoder, numEnDecoders),
-		middle_layer: NewConvLayer(inputChannels, kernelSize, maxNumFilters, activation),
-		decoders:     make([]*Decoder, numEnDecoders),
+		encoders: make([]*Encoder, numEnDecoders),
+		bottleneck: NewDecoder(
+			[]ConvParams{cl_params, cl_params},
+			[]UpsampleParams{{kernelSize}},
+		),
+		decoders: make([]*Decoder, numEnDecoders),
 	}
 
 	// build the encoder-decoder pairs
 	for i := 0; i < numEnDecoders; i++ {
-		num_filters := int(float64(maxNumFilters) / math.Pow(float64(kernelSize), float64(numEnDecoders-i-1)))
 		unet.encoders[i] = NewEncoder(
-			inputChannels,
-			[]ConvParams{{kernelSize, num_filters, activation}},
+			[]ConvParams{cl_params, cl_params},
 			[]PoolParams{{kernelSize, kernelSize}},
 		)
 		unet.decoders[i] = NewDecoder(
-			num_filters,
-			[]ConvParams{{kernelSize, num_filters, activation}},
+			[]ConvParams{cl_params, cl_params},
 			[]UpsampleParams{{kernelSize}},
 		)
+		cl_params.NumFilters *= 2
 
 	}
-	// reverse unet.decoders
+	unet.bottleneck = NewDecoder(
+		[]ConvParams{cl_params, cl_params},
+		[]UpsampleParams{{1}},
+	)
+	// reverse unet.decoders so that the densest layer is first
 	slices.Reverse(unet.decoders)
 
 	return unet
 }
 
 // Forward performs a forward pass through the U-Net model
-func (unet *Unet) Forward(input *mat64.Dense) *mat64.Dense {
+func (unet *Unet) Forward(input *mat64.Dense) {
 
-	/*
-		An example with 3 conv layers would be
-		conv1 -> pool1 -> conv2 -> pool2 -> conv3 ->
-		upsample1 -> conv4 -> upsample2 -> conv5 -> output
-	*/
-
+	// pass through encoders
+	encoder_output := make([]*mat64.Dense, unet.numEnDecoders)
 	for i := 0; i < unet.numEnDecoders; i++ {
-		input = unet.encoders[i].Forward(input)
+		encoder_output[i] = unet.encoders[i].Forward(input)
+		input = encoder_output[i]
 	}
-	input = unet.middle_layer.Forward(input)
-	for i := 0; i < unet.numEnDecoders; i++ {
-		input = unet.decoders[i].Forward(input)
-	}
-	return input
 
+	// handle bottleneck
+	input = unet.bottleneck.Forward(input, encoder_output[unet.numEnDecoders-1])
+
+	// pass through decoders
+	for i := 0; i < unet.numEnDecoders; i++ {
+		input = unet.decoders[i].Forward(input, encoder_output[i])
+	}
+	// no return, pass by reference
 }
 
 // Backward performs a backward pass through the U-Net model
-func (unet *Unet) Backward(input *mat64.Dense) *mat64.Dense {
+func (unet *Unet) Backward(input *mat64.Dense, target *mat64.Dense) *mat64.Dense {
 
+	// compute loss
+	loss := mat64.NewDense(0, 0, nil)
+	loss.Sub(input, target)
+
+	// compute gradients for both weights and biases
+	gradOutput := loss
+	for i := 0; i < unet.numEnDecoders; i++ {
+		gradOutput = unet.decoders[i].Backward(gradOutput)
+	}
+	gradOutput, _, _ = unet.middle_layer.Backward(gradOutput)
+	for i := 0; i < unet.numEnDecoders; i++ {
+		gradOutput = unet.encoders[i].Backward(gradOutput)
+	}
+
+	return gradOutput
 }

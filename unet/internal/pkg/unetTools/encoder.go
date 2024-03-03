@@ -17,18 +17,24 @@ type Encoder struct {
 }
 
 // NewEncoder initializes a new instance of Encoder
-func NewEncoder(inputChannels int, convParams []ConvParams, poolParams []PoolParams) *Encoder {
+func NewEncoder(convParams []ConvParams, poolParams []PoolParams) *Encoder {
 	encoder := &Encoder{}
 
 	// Create convolutional layers
-	for _, params := range convParams {
-		encoder.convLayers = append(encoder.convLayers, NewConvLayer(inputChannels, params.KernelSize, params.NumFilters, params.Activation))
-		inputChannels = params.NumFilters
+	encoder.convLayers = make([]*ConvLayer, len(convParams))
+	for i, params := range convParams {
+		encoder.convLayers[i] = NewConvLayer(
+			params.InputChannels,
+			params.KernelSize,
+			params.NumFilters,
+			params.Activation,
+		)
 	}
 
-	// Create pooling layers
-	for _, params := range poolParams {
-		encoder.poolLayers = append(encoder.poolLayers, NewMaxPoolLayer(params.PoolSize, params.Stride))
+	// Create pooling layer
+	encoder.poolLayers = make([]*MaxPoolLayer, len(poolParams))
+	for i, params := range poolParams {
+		encoder.poolLayers[i] = NewMaxPoolLayer(params.PoolSize, params.Stride)
 	}
 
 	return encoder
@@ -37,14 +43,39 @@ func NewEncoder(inputChannels int, convParams []ConvParams, poolParams []PoolPar
 // Forward performs a forward pass through the Encoder
 func (enc *Encoder) Forward(input *mat64.Dense) *mat64.Dense {
 	output := input
-	for i, convLayer := range enc.convLayers {
+	for _, convLayer := range enc.convLayers {
 		// Forward pass through convolutional layer
 		output = convLayer.Forward(output)
-
-		// If there is a pooling layer corresponding to this convolutional layer, apply pooling
-		if i < len(enc.poolLayers) {
-			output = enc.poolLayers[i].Forward(output)
-		}
 	}
+	// Forward pass through pooling layer (there should only ever be 1)
+	for _, poolLayer := range enc.poolLayers {
+		output = poolLayer.Forward(output)
+	}
+
 	return output
+}
+
+// Backward performs a backward pass through the Encoder
+func (enc *Encoder) Backward(gradOutput *mat64.Dense) (*mat64.Dense, *mat64.Dense, *mat64.Dense) {
+	// Declare variables for accumulating gradients
+	rows := enc.convLayers[0].Weights.RawMatrix().Rows
+	cols := enc.convLayers[0].Weights.RawMatrix().Cols
+	accWeights := mat64.NewDense(rows, cols, nil)
+	accBiases := mat64.NewDense(1, cols, nil)
+
+	// Backward pass through pooling layer (there should only ever be 1)
+	for i := len(enc.poolLayers) - 1; i >= 0; i-- {
+		gradOutput = enc.poolLayers[i].Backward(gradOutput)
+	}
+
+	// Backward pass through convolutional layers
+	for i := len(enc.convLayers) - 1; i >= 0; i-- {
+		weights, biases := enc.convLayers[i].Backward(gradOutput)
+
+		// Accumulate gradients
+		accWeights.Add(accWeights, weights)
+		accBiases.Add(accBiases, biases)
+	}
+
+	return gradOutput, accWeights, accBiases
 }

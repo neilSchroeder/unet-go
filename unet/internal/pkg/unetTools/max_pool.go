@@ -50,27 +50,6 @@ func (mpl *MaxPoolLayer) Forward(input *mat64.Dense) *mat64.Dense {
 }
 
 // Backward performs a backward pass through the MaxPoolLayer
-func (mpl *MaxPoolLayer) Backward(input *mat64.Dense, gradOutput *mat64.Dense) *mat64.Dense {
-	inputRows, inputCols := input.Dims()
-	outputRows, outputCols := gradOutput.Dims()
-	gradInput := mat64.NewDense(inputRows, inputCols, nil)
-
-	for i := 0; i < outputRows; i++ {
-		for j := 0; j < outputCols; j++ {
-			maxVal := -1e9 // initialize with a very small number
-			maxI, maxJ := 0, 0
-			for m := 0; m < mpl.poolSize; m++ {
-				for n := 0; n < mpl.poolSize; n++ {
-					val := input.At(i*mpl.stride+m, j*mpl.stride+n)
-					if val > maxVal {
-						maxVal = val
-						maxI, maxJ = i*mpl.stride+m, j*mpl.stride+n
-					}
-				}
-			}
-			gradInput.Set(maxI, maxJ, gradOutput.At(i, j))
-		}
-	}
-
+func (mpl *MaxPoolLayer) Backward(gradInput *mat64.Dense) *mat64.Dense {
 	return gradInput
 }
