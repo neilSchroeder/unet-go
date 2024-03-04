@@ -1,7 +1,7 @@
 package unetTools
 
 import (
-	"slices"
+	"fmt"
 
 	"github.com/gonum/matrix/mat64"
 )
@@ -50,10 +50,9 @@ func (dec *Decoder) Forward(input *mat64.Dense, skip_features *mat64.Dense) *mat
 	}
 
 	// concatenate with skip features
-	outputSlice := output.RawMatrix().Data
-	skipFeaturesSlice := skip_features.RawMatrix().Data
-	concatenated := slices.Concat(outputSlice, skipFeaturesSlice)
-	output = mat64.NewDense(output.RawMatrix().Rows, output.RawMatrix().Cols, concatenated)
+	fmt.Println(output.Dims())
+	fmt.Println(skip_features.Dims())
+	output.Stack(output, skip_features)
 
 	// pass through convolutional layers
 	for _, conv := range dec.convLayers {

@@ -125,7 +125,5 @@ func LoadImage(filePath string) *mat64.Dense {
 		}
 	}
 
-	// Print the matrix
-	fmt.Println(ret)
 	return ret
 }
