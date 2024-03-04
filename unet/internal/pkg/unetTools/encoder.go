@@ -56,7 +56,7 @@ func (enc *Encoder) Forward(input *mat64.Dense) *mat64.Dense {
 }
 
 // Backward performs a backward pass through the Encoder
-func (enc *Encoder) Backward(gradOutput *mat64.Dense) (*mat64.Dense, *mat64.Dense, *mat64.Dense) {
+func (enc *Encoder) Backward(gradOutput *mat64.Dense) (*mat64.Dense, *mat64.Dense) {
 	// Declare variables for accumulating gradients
 	rows := enc.convLayers[0].Weights.RawMatrix().Rows
 	cols := enc.convLayers[0].Weights.RawMatrix().Cols
@@ -77,5 +77,12 @@ func (enc *Encoder) Backward(gradOutput *mat64.Dense) (*mat64.Dense, *mat64.Dens
 		accBiases.Add(accBiases, biases)
 	}
 
-	return gradOutput, accWeights, accBiases
+	return accWeights, accBiases
+}
+
+// Update updates the weights and biases of the Encoder
+func (enc *Encoder) Update(weights *mat64.Dense, biases *mat64.Dense, learningRate float64) {
+	for _, convLayer := range enc.convLayers {
+		convLayer.UpdateWeightsAndBiases(learningRate, weights, biases)
+	}
 }

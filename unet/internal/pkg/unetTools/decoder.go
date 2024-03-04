@@ -64,7 +64,7 @@ func (dec *Decoder) Forward(input *mat64.Dense, skip_features *mat64.Dense) *mat
 }
 
 // Backward performs a backward pass through the Decoder
-func (dec *Decoder) Backward(outputGrad *mat64.Dense) (*mat64.Dense, *mat64.Dense, *mat64.Dense) {
+func (dec *Decoder) Backward(outputGrad *mat64.Dense) (*mat64.Dense, *mat64.Dense) {
 	// Declare variables for accumulating gradients
 	rows := dec.convParams[0].InputChannels * dec.convParams[0].KernelSize * dec.convParams[0].KernelSize
 	cols := dec.convParams[0].NumFilters
@@ -76,5 +76,14 @@ func (dec *Decoder) Backward(outputGrad *mat64.Dense) (*mat64.Dense, *mat64.Dens
 		accWeights.Add(accWeights, dWeights)
 		accBiases.Add(accBiases, dBiases)
 	}
-	return outputGrad, accWeights, accBiases
+	return accWeights, accBiases
+}
+
+// Update updates the weights and biases of the Decoder using the accumulated
+// gradients and the learning rate
+func (dec *Decoder) Update(weights *mat64.Dense, biases *mat64.Dense, learningRate float64) {
+	for _, cl := range dec.convLayers {
+		// Update weights and biases of convolutional layer
+		cl.UpdateWeightsAndBiases(learningRate, weights, biases)
+	}
 }

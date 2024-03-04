@@ -165,13 +165,13 @@ func (cl *ConvLayer) UpdateWeightsAndBiases(learningRate float64, gradWeights, g
 
 	// Update Weights
 	Weights := mat64.DenseCopyOf(cl.Weights)
-	mWeightsCorrected = ScaleMatrixByMatrix(mWeightsCorrected, ConstDivMatrix(learningRate, (MatrixAddConst(MatrixSqrt(vWeightsCorrected), cl.epsilon))))
+	mWeightsCorrected.MulElem(mWeightsCorrected, ConstDivMatrix(learningRate, (MatrixAddConst(MatrixSqrt(vWeightsCorrected), cl.epsilon))))
 	Weights.Sub(Weights, mWeightsCorrected)
 	cl.Weights = Weights
 
 	// Update biases
 	biases := mat64.DenseCopyOf(cl.Biases)
-	mBiasesCorrected = ScaleMatrixByMatrix(mBiasesCorrected, ConstDivMatrix(learningRate, (MatrixAddConst(MatrixSqrt(vBiasesCorrected), cl.epsilon))))
+	mBiasesCorrected.MulElem(mBiasesCorrected, ConstDivMatrix(learningRate, (MatrixAddConst(MatrixSqrt(vBiasesCorrected), cl.epsilon))))
 	biases.Sub(biases, mBiasesCorrected)
 	cl.Biases = biases
 }
