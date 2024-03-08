@@ -1,9 +1,11 @@
 package unetTools
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/gonum/matrix/mat64"
+	mat "github.com/gonum/matrix/mat64"
 )
 
 // ConvParams represents the parameters for a convolutional layer
@@ -20,8 +22,8 @@ type ConvParams struct {
 
 // ConvLayer represents a convolutional layer
 type ConvLayer struct {
-	Weights       *mat64.Dense
-	Biases        *mat64.Dense
+	Weights       []*mat64.Dense
+	Biases        []*mat64.Dense
 	KernelSize    int
 	Activation    string
 	InputChannels int
@@ -35,15 +37,22 @@ type ConvLayer struct {
 	mBiases  *mat64.Dense
 	vBiases  *mat64.Dense
 	t        int
+	_input   []*mat64.Dense
+	_output  []*mat64.Dense
 }
 
 // NewConvLayer initializes a new instance of ConvLayer
 func NewConvLayer(InputChannels, KernelSize, NumFilters int, Activation string) *ConvLayer {
-	Weights := mat64.NewDense(KernelSize*KernelSize*InputChannels, NumFilters, randomMatrixValues(KernelSize*KernelSize*InputChannels*NumFilters))
-	biases := mat64.NewDense(1, NumFilters, randomMatrixValues(NumFilters))
+	// the number of filters determines the number of matrices used for the weights
+	Weights := make([]*mat64.Dense, NumFilters)
+	Biases := make([]*mat64.Dense, NumFilters)
+	for i := 0; i < NumFilters; i++ {
+		Weights[i] = mat64.NewDense(KernelSize, KernelSize, randomMatrixValues(KernelSize*KernelSize))
+		Biases[i] = mat64.NewDense(1, 1, randomMatrixValues(1))
+	}
 	return &ConvLayer{
 		Weights:       Weights,
-		Biases:        biases,
+		Biases:        Biases,
 		KernelSize:    KernelSize,
 		Activation:    Activation,
 		InputChannels: InputChannels,
@@ -52,126 +61,137 @@ func NewConvLayer(InputChannels, KernelSize, NumFilters int, Activation string) 
 		beta1:    0.9,
 		beta2:    0.999,
 		epsilon:  1e-8,
-		mWeights: mat64.NewDense(Weights.RawMatrix().Rows, Weights.RawMatrix().Cols, nil),
-		vWeights: mat64.NewDense(Weights.RawMatrix().Rows, Weights.RawMatrix().Cols, nil),
-		mBiases:  mat64.NewDense(biases.RawMatrix().Rows, biases.RawMatrix().Cols, nil),
-		vBiases:  mat64.NewDense(biases.RawMatrix().Rows, biases.RawMatrix().Cols, nil),
+		mWeights: mat64.NewDense(KernelSize, KernelSize, nil),
+		vWeights: mat64.NewDense(KernelSize, KernelSize, nil),
+		mBiases:  mat64.NewDense(1, 1, nil),
+		vBiases:  mat64.NewDense(1, 1, nil),
 		t:        0,
 	}
+
 }
 
-// Forward performs a forward pass through the ConvLayer
-func (cl *ConvLayer) Forward(input *mat64.Dense) *mat64.Dense {
+func (cl *ConvLayer) Convolve(input, weights, biases *mat64.Dense) *mat64.Dense {
 	inputRows, inputCols := input.Dims()
-	NumFilters, _ := cl.Weights.Dims()
-	outputRows, outputCols := inputRows-cl.KernelSize+1, inputCols-cl.KernelSize+1
+	weightsRows, weightsCols := weights.Dims()
+	outputRows := inputRows - weightsRows + 1
+	outputCols := inputCols - weightsCols + 1
 	output := mat64.NewDense(outputRows, outputCols, nil)
 
-	// Perform convolution
 	for i := 0; i < outputRows; i++ {
 		for j := 0; j < outputCols; j++ {
-			for k := 0; k < NumFilters; k++ {
-				var sum float64
-				for m := 0; m < cl.KernelSize; m++ {
-					for n := 0; n < cl.KernelSize; n++ {
-						for c := 0; c < cl.InputChannels; c++ {
-							inputVal := input.At(i+m, j+n)
-							weight := cl.Weights.At(m*cl.KernelSize*cl.InputChannels+n*cl.InputChannels+c, k)
-							sum += inputVal * weight
-						}
-					}
+			sum := 0.0
+			for m := 0; m < weightsRows; m++ {
+				for n := 0; n < weightsCols; n++ {
+					sum += input.At(i+m, j+n) * weights.At(m, n)
 				}
-				bias := cl.Biases.At(0, k)
-				sum += bias
-				output.Set(i, j, sum)
 			}
+			sum /= float64(weightsRows * weightsCols)
+			output.Set(i, j, sum+biases.At(0, 0))
 		}
 	}
 
-	// Apply Activation function
-	applyActivation(output, cl.Activation)
 	return output
+}
+
+// Forward performs a forward pass through the ConvLayer
+func (cl *ConvLayer) Forward(input []*mat64.Dense) []*mat64.Dense {
+	copy(cl._input, input)
+	layer_out := make([]*mat64.Dense, cl.NumFilters)
+
+	for i := 0; i < cl.NumFilters; i++ {
+		for j := 0; j < len(input); j++ {
+			if j == 0 {
+				layer_out[i] = cl.Convolve(input[i], cl.Weights[i], cl.Biases[i])
+			} else {
+				layer_out[i].Add(layer_out[i], cl.Convolve(input[i], cl.Weights[i], cl.Biases[i]))
+			}
+		}
+		layer_out[i].Scale(1.0/float64(len(input)), layer_out[i])
+		applyActivation(layer_out[i], cl.Activation)
+	}
+
+	copy(cl._output, layer_out)
+	return layer_out
 }
 
 // Backward computes the backward pass of the convolutional layer.
 // It takes the gradient of the output matrix as input,
 // and returns the gradient of the input matrix, the gradient of the Weights matrix,
 // and the gradient of the biases matrix.
-func (cl *ConvLayer) Backward(gradOutput *mat64.Dense) (*mat64.Dense, *mat64.Dense) {
-	inputRows, inputCols := gradOutput.Dims()
-	NumFilters, _ := cl.Weights.Dims()
-	gradWeights := mat64.NewDense(cl.KernelSize*cl.KernelSize*cl.InputChannels, NumFilters, nil)
-	gradBiases := mat64.NewDense(1, NumFilters, nil)
+func (cl *ConvLayer) Backward(outputGrad *mat.Dense, learningRate float64) {
 
-	// Compute the gradient of the loss with respect to the input
-	for i := 0; i < inputRows; i++ {
-		for j := 0; j < inputCols; j++ {
-			for k := 0; k < NumFilters; k++ {
-				gradBias := gradOutput.At(i, j)
-				gradBiases.Set(0, k, gradBiases.At(0, k)+gradBias)
-				for m := 0; m < cl.KernelSize; m++ {
-					for n := 0; n < cl.KernelSize; n++ {
-						for c := 0; c < cl.InputChannels; c++ {
-							gradWeight := cl.Weights.At(m*cl.KernelSize*cl.InputChannels+n*cl.InputChannels+c, k) * gradOutput.At(i, j)
-							gradWeights.Set(m*cl.KernelSize*cl.InputChannels+n*cl.InputChannels+c, k, gradWeights.At(m*cl.KernelSize*cl.InputChannels+n*cl.InputChannels+c, k)+gradWeight)
-						}
-					}
-				}
-			}
-		}
+	// Compute gradients of the loss with respect to weights and biases
+	for i := 0; i < cl.NumFilters; i++ {
+		// Compute gradients with respect to weights
+		gradWeights := mat64.NewDense(cl.KernelSize, cl.KernelSize*cl.InputChannels, nil)
+
+		// Compute gradients with respect to biases
+		gradBiases := mat.NewDense(1, 1, nil)
+		gradBiases.Apply(func(_, _ int, v float64) float64 { return v }, cl.Biases[i])
+
+		// Update weights and biases using AdamW optimizer
+		cl.UpdateWeightsAndBiases(i, learningRate, gradWeights, gradBiases)
 	}
-
-	return gradWeights, gradBiases
 }
 
 // UpdateWeightsAndBiases updates the Weights and biases of the convolutional layer using AdamW optimizer
 // This function gets called after all the gradients have been computed and accumulated.
-func (cl *ConvLayer) UpdateWeightsAndBiases(learningRate float64, gradWeights, gradBiases *mat64.Dense) {
-	// Increment time step
-	cl.t++
+func (cl *ConvLayer) UpdateWeightsAndBiases(filterIndex int, learningRate float64, gradWeights, gradBiases *mat64.Dense) {
+	// Compute AdamW updates for weights
+	cl.mWeights.Apply(func(i, j int, v float64) float64 {
+		return cl.beta1*v + (1-cl.beta1)*gradWeights.At(i, j)
+	}, cl.mWeights)
+	cl.vWeights.Apply(func(i, j int, v float64) float64 {
+		return cl.beta2*v + (1-cl.beta2)*gradWeights.At(i, j)*gradWeights.At(i, j)
+	}, cl.vWeights)
+	mHat := mat.NewDense(gradWeights.RawMatrix().Rows, gradWeights.RawMatrix().Cols, nil)
+	mHat.Apply(func(i, j int, v float64) float64 {
+		return v / (1 - math.Pow(cl.beta1, float64(cl.t+1)))
+	}, cl.mWeights)
+	vHat := mat.NewDense(gradWeights.RawMatrix().Rows, gradWeights.RawMatrix().Cols, nil)
+	vHat.Apply(func(i, j int, v float64) float64 {
+		return v / (1 - math.Pow(cl.beta2, float64(cl.t+1)))
+	}, cl.vWeights)
+	weightUpdate := mat.NewDense(gradWeights.RawMatrix().Rows, gradWeights.RawMatrix().Cols, nil)
+	weightUpdate.Apply(func(i, j int, v float64) float64 {
+		return learningRate * v / (math.Sqrt(vHat.At(i, j)) + cl.epsilon)
+	}, mHat)
 
-	// Compute biased first and second moment estimates
-	cl.mWeights.Scale(cl.beta1, cl.mWeights)
-	gradWeights.Scale(1-cl.beta1, gradWeights)
-	cl.mWeights.Add(cl.mWeights, gradWeights)
-	cl.vWeights.Scale(cl.beta2, cl.vWeights)
-	gradWeightsPow2 := mat64.NewDense(gradWeights.RawMatrix().Rows, gradWeights.RawMatrix().Cols, nil)
-	gradWeightsPow2.MulElem(gradWeights, gradWeights)
-	gradWeightsPow2.Scale(1-cl.beta2, gradWeightsPow2)
-	cl.vWeights.Add(cl.vWeights, gradWeightsPow2)
+	// Update weights
+	cl.Weights[filterIndex].Sub(cl.Weights[filterIndex], weightUpdate)
 
-	cl.mBiases.Scale(cl.beta1, cl.mBiases)
-	gradBiases.Scale(1-cl.beta1, gradBiases)
-	cl.mBiases.Add(cl.mBiases, gradBiases)
-	cl.vBiases.Scale(cl.beta2, cl.vBiases)
-	gradBiasesPow2 := mat64.NewDense(gradBiases.RawMatrix().Rows, gradBiases.RawMatrix().Cols, nil)
-	gradBiasesPow2.MulElem(gradBiases, gradBiases)
-	gradBiasesPow2.Scale(1-cl.beta2, gradBiasesPow2)
-	cl.vBiases.Add(cl.vBiases, gradBiasesPow2)
-
-	// Correct bias in the first moment
-	mWeightsCorrected := mat64.NewDense(cl.mWeights.RawMatrix().Rows, cl.mWeights.RawMatrix().Cols, nil)
-	mWeightsCorrected.Scale(1.0/(1-math.Pow(cl.beta1, float64(cl.t))), cl.mWeights)
-
-	mBiasesCorrected := mat64.NewDense(cl.mBiases.RawMatrix().Rows, cl.mBiases.RawMatrix().Cols, nil)
-	mBiasesCorrected.Scale(1.0/(1-math.Pow(cl.beta1, float64(cl.t))), cl.mBiases)
-
-	// Correct bias in the second moment
-	vWeightsCorrected := mat64.NewDense(cl.vWeights.RawMatrix().Rows, cl.vWeights.RawMatrix().Cols, nil)
-	vWeightsCorrected.Scale(1.0/(1-math.Pow(cl.beta2, float64(cl.t))), cl.vWeights)
-
-	vBiasesCorrected := mat64.NewDense(cl.vBiases.RawMatrix().Rows, cl.vBiases.RawMatrix().Cols, nil)
-	vBiasesCorrected.Scale(1.0/(1-math.Pow(cl.beta2, float64(cl.t))), cl.vBiases)
-
-	// Update Weights
-	Weights := mat64.DenseCopyOf(cl.Weights)
-	mWeightsCorrected.MulElem(mWeightsCorrected, ConstDivMatrix(learningRate, (MatrixAddConst(MatrixSqrt(vWeightsCorrected), cl.epsilon))))
-	Weights.Sub(Weights, mWeightsCorrected)
-	cl.Weights = Weights
+	// Compute AdamW updates for biases
+	cl.mBiases.Apply(func(i, j int, v float64) float64 {
+		return cl.beta1*v + (1-cl.beta1)*gradBiases.At(i, j)
+	}, cl.mBiases)
+	cl.vBiases.Apply(func(i, j int, v float64) float64 {
+		return cl.beta2*v + (1-cl.beta2)*gradBiases.At(i, j)*gradBiases.At(i, j)
+	}, cl.vBiases)
+	mHatB := mat.NewDense(gradBiases.RawMatrix().Rows, gradBiases.RawMatrix().Cols, nil)
+	mHatB.Apply(func(i, j int, v float64) float64 {
+		return v / (1 - math.Pow(cl.beta1, float64(cl.t+1)))
+	}, cl.mBiases)
+	vHatB := mat.NewDense(gradBiases.RawMatrix().Rows, gradBiases.RawMatrix().Cols, nil)
+	vHatB.Apply(func(i, j int, v float64) float64 {
+		return v / (1 - math.Pow(cl.beta2, float64(cl.t+1)))
+	}, cl.vBiases)
+	biasUpdate := mat.NewDense(gradBiases.RawMatrix().Rows, gradBiases.RawMatrix().Cols, nil)
+	biasUpdate.Apply(func(i, j int, v float64) float64 {
+		return learningRate * v / (math.Sqrt(vHatB.At(i, j)) + cl.epsilon)
+	}, mHatB)
 
 	// Update biases
-	biases := mat64.DenseCopyOf(cl.Biases)
-	mBiasesCorrected.MulElem(mBiasesCorrected, ConstDivMatrix(learningRate, (MatrixAddConst(MatrixSqrt(vBiasesCorrected), cl.epsilon))))
-	biases.Sub(biases, mBiasesCorrected)
-	cl.Biases = biases
+	cl.Biases[filterIndex].Sub(cl.Biases[filterIndex], biasUpdate)
+
+	// Increment time step
+	cl.t++
+}
+
+// Summary returns a summary of the ConvLayer
+func (cl *ConvLayer) Summary() string {
+	summary := fmt.Sprintf("    Activation: %s\n", cl.Activation)
+	summary += fmt.Sprintf("    KernelSize: %d\n", cl.KernelSize)
+	summary += fmt.Sprintf("    InputChannels: %d\n", cl.InputChannels)
+	summary += fmt.Sprintf("    NumFilters: %d\n", cl.NumFilters)
+	return summary
 }

@@ -11,17 +11,20 @@ func main() {
 	my_net := unetTools.NewUnet(
 		572,                // input size
 		1,                  // input channels
-		3,                  // number of encoder-decoder pairs
+		4,                  // number of encoder-decoder pairs
 		64,                 // maximum number of filters in conv layers
-		"relu",             // activation function
+		"sigmoid",          // activation function
 		3,                  // size of convolutional kernel
+		2,                  // size of pooling kernel
+		2,                  // stride of pooling kernel
 		unetTools.DiceLoss, // loss function
 	)
-	fmt.Println(my_net)
+	my_net.Summary()
 
 	// load image from data/ directory
 	input := unetTools.LoadImage("/home/nschroed/work/unet-go/unet/data/CHANEL_THUMB.jpg")
 
 	my_net.Step(input, input, 0.001)
+	fmt.Print(my_net.GetLoss())
 
 }

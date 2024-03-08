@@ -1,6 +1,7 @@
 package unetTools
 
 import (
+	"fmt"
 	"math"
 	"slices"
 
@@ -21,6 +22,8 @@ type Unet struct {
 	numFiltersLayer1 int     // Maximum number of filters in conv layers
 	activation       string  // Activation function
 	kernelSize       int     // Size of convolutional kernel
+	poolSize         int     // Size of pooling kernel
+	poolStride       int     // Stride of pooling kernel
 	learningRate     float64 // Learning rate
 	lossTolerance    float64 // Loss tolerance (will exit if loss less than this value)
 	maxIterations    int     // Maximum number of iterations
@@ -45,6 +48,8 @@ func NewUnet(
 	numFiltersLayer1 int,
 	activation string,
 	kernelSize int,
+	poolSize int,
+	poolStride int,
 	lossFunc func(*mat64.Dense, *mat64.Dense) float64,
 ) *Unet {
 
@@ -52,6 +57,16 @@ func NewUnet(
 		activation,
 		inputChannels,
 		kernelSize,
+		numFiltersLayer1,
+		0.9,
+		0.999,
+		1e-8,
+	}
+	ctl_params := ConvTransParams{
+		activation,
+		inputChannels,
+		kernelSize,
+		poolStride,
 		numFiltersLayer1,
 		0.9,
 		0.999,
@@ -65,12 +80,14 @@ func NewUnet(
 		numFiltersLayer1: numFiltersLayer1,
 		activation:       activation,
 		kernelSize:       kernelSize,
+		poolSize:         poolSize,
+		poolStride:       poolStride,
 		lossFunc:         lossFunc,
 
 		encoders: make([]*Encoder, numEnDecoders),
 		bottleneck: NewDecoder(
 			[]ConvParams{cl_params, cl_params},
-			[]UpsampleParams{{kernelSize}},
+			[]ConvTransParams{ctl_params},
 		),
 		decoders: make([]*Decoder, numEnDecoders),
 	}
@@ -79,21 +96,24 @@ func NewUnet(
 	for i := 0; i < numEnDecoders; i++ {
 		unet.encoders[i] = NewEncoder(
 			[]ConvParams{cl_params, cl_params},
-			[]PoolParams{{kernelSize, kernelSize}},
-		)
-		unet.decoders[i] = NewDecoder(
-			[]ConvParams{cl_params, cl_params},
-			[]UpsampleParams{{kernelSize}},
+			[]PoolParams{{poolSize, poolStride}},
 		)
 		cl_params.NumFilters *= 2
 
 	}
 	unet.bottleneck = NewDecoder(
 		[]ConvParams{cl_params, cl_params},
-		[]UpsampleParams{{1}},
+		[]ConvTransParams{},
 	)
-	// reverse unet.decoders so that the densest layer is first
-	slices.Reverse(unet.decoders)
+	for i := 0; i < numEnDecoders; i++ {
+		cl_params_half := cl_params
+		cl_params_half.NumFilters /= 2
+		unet.decoders[i] = NewDecoder(
+			[]ConvParams{cl_params, cl_params_half},
+			[]ConvTransParams{ctl_params},
+		)
+		cl_params.NumFilters /= 2
+	}
 
 	unet._steps = 0
 	unet._loss = math.Inf(1) // positive infinity
@@ -111,9 +131,11 @@ func (unet *Unet) Forward(input *mat64.Dense) {
 		encoder_output[i] = unet.encoders[i].Forward(input)
 		input = encoder_output[i]
 	}
+	slices.Reverse(encoder_output)
 
 	// handle bottleneck
-	input = unet.bottleneck.Forward(input, encoder_output[len(encoder_output)-1])
+	// bottleneck doesn't have a skip connection
+	input = unet.bottleneck.Forward(input, nil)
 
 	// pass through decoders
 	for i := 0; i < unet.numEnDecoders; i++ {
@@ -123,42 +145,30 @@ func (unet *Unet) Forward(input *mat64.Dense) {
 }
 
 // Backward performs a backward pass through the U-Net model
-func (unet *Unet) Backward(input *mat64.Dense, target *mat64.Dense, loss float64) (*mat64.Dense, *mat64.Dense, *mat64.Dense) {
+func (unet *Unet) Backward(input *mat64.Dense, target *mat64.Dense, loss float64) {
 	// compute gradients for both weights and biases
 	gradOutput := mat64.NewDense(target.RawMatrix().Rows, target.RawMatrix().Cols, nil)
 	gradOutput.Sub(target, input)
 	gradOutput.Scale(loss, gradOutput)
 
-	rows := unet.encoders[0].convLayers[0].Weights.RawMatrix().Rows
-	cols := unet.encoders[0].convLayers[0].Weights.RawMatrix().Cols
-	accWeights := mat64.NewDense(rows, cols, nil)
-	accBiases := mat64.NewDense(1, cols, nil)
 	for _, decode := range unet.decoders {
-		w, b := decode.Backward(gradOutput)
-		accWeights.Add(accWeights, w)
-		accBiases.Add(accBiases, b)
+		decode.Backward(gradOutput)
 	}
-	w, b := unet.bottleneck.Backward(gradOutput)
-	accWeights.Add(accWeights, w)
-	accBiases.Add(accBiases, b)
+	unet.bottleneck.Backward(gradOutput)
 	for _, encode := range unet.encoders {
-		w, b := encode.Backward(gradOutput)
-		accWeights.Add(accWeights, w)
-		accBiases.Add(accBiases, b)
+		encode.Backward(gradOutput)
 	}
-
-	return gradOutput, accWeights, accBiases
 }
 
 // Update updates the weights and biases of the U-Net model
-func (unet *Unet) Update(weights *mat64.Dense, biases *mat64.Dense, learningRate float64) {
+func (unet *Unet) Update() {
 	// update weights and biases
 	for _, encode := range unet.encoders {
-		encode.Update(weights, biases, learningRate)
+		encode.Update(unet.learningRate)
 	}
-	unet.bottleneck.Update(weights, biases, learningRate)
+	unet.bottleneck.Update(unet.learningRate)
 	for _, decode := range unet.decoders {
-		decode.Update(weights, biases, learningRate)
+		decode.Update(unet.learningRate)
 	}
 }
 
@@ -169,11 +179,14 @@ func (unet *Unet) Step(
 	target *mat64.Dense,
 	learningRate float64,
 ) float64 {
+	fmt.Println("[INFO] UNet Forward:")
 	unet.Forward(input)
 	// compute loss
 	unet._loss = unet.lossFunc(input, target)
-	_, accWeights, accBiases := unet.Backward(input, target, unet._loss)
-	unet.Update(accWeights, accBiases, learningRate)
+	fmt.Println("[INFO] UNet Loss:", unet._loss)
+	fmt.Println("[INFO] UNet Backward:")
+	unet.Backward(input, target, unet._loss)
+	unet.Update()
 	unet._steps++
 	if unet._steps > unet.maxIterations || unet._loss < unet.lossTolerance {
 		unet._stop = true
@@ -182,5 +195,23 @@ func (unet *Unet) Step(
 		This would be the place to add a check for convergence,
 		update the learning rate, etc.
 	*/
+	return unet._loss
+}
+
+// Summary returns a string representation of the U-Net model
+func (unet *Unet) Summary() string {
+	// print summary of each encoder
+	for _, encode := range unet.encoders {
+		encode.Summary()
+	}
+	unet.bottleneck.Summary()
+	for _, decode := range unet.decoders {
+		decode.Summary()
+	}
+	return "Unet"
+}
+
+// GetLoss returns the current loss of the U-Net model
+func (unet *Unet) GetLoss() float64 {
 	return unet._loss
 }

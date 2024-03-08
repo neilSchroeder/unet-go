@@ -1,6 +1,8 @@
 package unetTools
 
 import (
+	"fmt"
+
 	"github.com/gonum/matrix/mat64"
 )
 
@@ -14,6 +16,10 @@ type EncoderParams struct {
 type Encoder struct {
 	convLayers []*ConvLayer
 	poolLayers []*MaxPoolLayer
+
+	// internal params
+	_dWeights []*mat64.Dense
+	_dBiases  []*mat64.Dense
 }
 
 // NewEncoder initializes a new instance of Encoder
@@ -37,52 +43,47 @@ func NewEncoder(convParams []ConvParams, poolParams []PoolParams) *Encoder {
 		encoder.poolLayers[i] = NewMaxPoolLayer(params.PoolSize, params.Stride)
 	}
 
+	encoder._dWeights = make([]*mat64.Dense, len(convParams))
+	encoder._dBiases = make([]*mat64.Dense, len(convParams))
+
 	return encoder
 }
 
 // Forward performs a forward pass through the Encoder
-func (enc *Encoder) Forward(input *mat64.Dense) *mat64.Dense {
-	output := input
+func (enc *Encoder) Forward(input []*mat64.Dense) []*mat64.Dense {
 	for _, convLayer := range enc.convLayers {
 		// Forward pass through convolutional layer
-		output = convLayer.Forward(output)
+		input = convLayer.Forward(input)
 	}
 	// Forward pass through pooling layer (there should only ever be 1)
 	for _, poolLayer := range enc.poolLayers {
-		output = poolLayer.Forward(output)
+		for _, o := range input {
+			o = poolLayer.Forward(o)
+		}
 	}
 
-	return output
+	return input
 }
 
 // Backward performs a backward pass through the Encoder
-func (enc *Encoder) Backward(gradOutput *mat64.Dense) (*mat64.Dense, *mat64.Dense) {
-	// Declare variables for accumulating gradients
-	rows := enc.convLayers[0].Weights.RawMatrix().Rows
-	cols := enc.convLayers[0].Weights.RawMatrix().Cols
-	accWeights := mat64.NewDense(rows, cols, nil)
-	accBiases := mat64.NewDense(1, cols, nil)
-
-	// Backward pass through pooling layer (there should only ever be 1)
-	for i := len(enc.poolLayers) - 1; i >= 0; i-- {
-		gradOutput = enc.poolLayers[i].Backward(gradOutput)
-	}
-
+func (enc *Encoder) Backward(gradOutput *mat64.Dense, learningRate float64) {
 	// Backward pass through convolutional layers
 	for i := len(enc.convLayers) - 1; i >= 0; i-- {
-		weights, biases := enc.convLayers[i].Backward(gradOutput)
-
-		// Accumulate gradients
-		accWeights.Add(accWeights, weights)
-		accBiases.Add(accBiases, biases)
+		enc.convLayers[i].Backward(gradOutput, learningRate)
 	}
-
-	return accWeights, accBiases
 }
 
-// Update updates the weights and biases of the Encoder
-func (enc *Encoder) Update(weights *mat64.Dense, biases *mat64.Dense, learningRate float64) {
-	for _, convLayer := range enc.convLayers {
-		convLayer.UpdateWeightsAndBiases(learningRate, weights, biases)
+// Summary returns a summary of the Encoder
+func (enc *Encoder) Summary() string {
+	summary := "Encoder:\n"
+	for i, convLayer := range enc.convLayers {
+		summary += fmt.Sprintf("  ConvLayer %d:\n", i)
+		summary += convLayer.Summary()
 	}
+	for i, poolLayer := range enc.poolLayers {
+		summary += fmt.Sprintf("  PoolLayer %d:\n", i)
+		summary += poolLayer.Summary()
+	}
+	fmt.Println(summary)
+	return summary
 }
