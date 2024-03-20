@@ -38,6 +38,7 @@ type Unet struct {
 	encoders   []*Encoder
 	bottleneck *Decoder
 	decoders   []*Decoder
+	finalConv  *ConvLayer
 }
 
 // NewUnet initializes a new instance of Unet
@@ -50,6 +51,7 @@ func NewUnet(
 	kernelSize int,
 	poolSize int,
 	poolStride int,
+	learningRate float64,
 	lossFunc func(*mat64.Dense, *mat64.Dense) float64,
 ) *Unet {
 
@@ -82,6 +84,7 @@ func NewUnet(
 		kernelSize:       kernelSize,
 		poolSize:         poolSize,
 		poolStride:       poolStride,
+		learningRate:     learningRate,
 		lossFunc:         lossFunc,
 
 		encoders: make([]*Encoder, numEnDecoders),
@@ -90,6 +93,9 @@ func NewUnet(
 			[]ConvTransParams{ctl_params},
 		),
 		decoders: make([]*Decoder, numEnDecoders),
+		finalConv: NewConvLayer(
+			1, 1, 1, "sigmoid",
+		), // final conv layer is a 1x1 convolution with 1 filter
 	}
 
 	// build the encoder-decoder pairs
@@ -106,13 +112,12 @@ func NewUnet(
 		[]ConvTransParams{},
 	)
 	for i := 0; i < numEnDecoders; i++ {
-		cl_params_half := cl_params
-		cl_params_half.NumFilters /= 2
+		cl_params.NumFilters /= 2
+		ctl_params.NumFilters = cl_params.NumFilters
 		unet.decoders[i] = NewDecoder(
-			[]ConvParams{cl_params, cl_params_half},
+			[]ConvParams{cl_params, cl_params},
 			[]ConvTransParams{ctl_params},
 		)
-		cl_params.NumFilters /= 2
 	}
 
 	unet._steps = 0
@@ -123,52 +128,55 @@ func NewUnet(
 }
 
 // Forward performs a forward pass through the U-Net model
-func (unet *Unet) Forward(input *mat64.Dense) {
+func (unet *Unet) Forward(input *mat64.Dense) []*mat64.Dense {
 
 	// pass through encoders
-	encoder_output := make([]*mat64.Dense, unet.numEnDecoders)
+	var output []*mat64.Dense
+	var encoder_outputs [][]*mat64.Dense
+	output = append(output, input)
 	for i := 0; i < unet.numEnDecoders; i++ {
-		encoder_output[i] = unet.encoders[i].Forward(input)
-		input = encoder_output[i]
+		output = unet.encoders[i].Forward(output)
+		encoder_outputs = append(encoder_outputs, nil)
+		copy(encoder_outputs[i], output)
 	}
-	slices.Reverse(encoder_output)
+	slices.Reverse(encoder_outputs)
 
 	// handle bottleneck
 	// bottleneck doesn't have a skip connection
-	input = unet.bottleneck.Forward(input, nil)
+	output = unet.bottleneck.Forward(output, nil)
 
 	// pass through decoders
 	for i := 0; i < unet.numEnDecoders; i++ {
-		input = unet.decoders[i].Forward(input, encoder_output[i])
+		output = unet.decoders[i].Forward(output, encoder_outputs[i])
 	}
-	// no return, pass by reference
+
+	// final convolution
+	output = unet.finalConv.Forward(output)
+	return output
 }
 
 // Backward performs a backward pass through the U-Net model
 func (unet *Unet) Backward(input *mat64.Dense, target *mat64.Dense, loss float64) {
 	// compute gradients for both weights and biases
 	gradOutput := mat64.NewDense(target.RawMatrix().Rows, target.RawMatrix().Cols, nil)
+	ir, ic := input.Dims()
+	tr, tc := target.Dims()
+	if ir != tr || ic != tc {
+		input = ResizeMatrix(input, tr, tc)
+	}
 	gradOutput.Sub(target, input)
-	gradOutput.Scale(loss, gradOutput)
+	gradOutput.Scale(-1*loss, gradOutput)
+	gradOutput = ResizeMatrix(gradOutput, ir, ic)
 
-	for _, decode := range unet.decoders {
-		decode.Backward(gradOutput)
-	}
-	unet.bottleneck.Backward(gradOutput)
-	for _, encode := range unet.encoders {
-		encode.Backward(gradOutput)
-	}
-}
+	fmt.Println("UNet learning rate", unet.learningRate)
+	unet.finalConv.Backward(gradOutput, unet.learningRate)
 
-// Update updates the weights and biases of the U-Net model
-func (unet *Unet) Update() {
-	// update weights and biases
-	for _, encode := range unet.encoders {
-		encode.Update(unet.learningRate)
+	for i := len(unet.decoders) - 1; i >= 0; i-- {
+		unet.decoders[i].Backward(gradOutput, unet.learningRate)
 	}
-	unet.bottleneck.Update(unet.learningRate)
-	for _, decode := range unet.decoders {
-		decode.Update(unet.learningRate)
+	unet.bottleneck.Backward(gradOutput, unet.learningRate)
+	for i := len(unet.encoders) - 1; i >= 0; i-- {
+		unet.encoders[i].Backward(gradOutput, unet.learningRate)
 	}
 }
 
@@ -180,13 +188,13 @@ func (unet *Unet) Step(
 	learningRate float64,
 ) float64 {
 	fmt.Println("[INFO] UNet Forward:")
-	unet.Forward(input)
+	output := unet.Forward(input)
+	SaveImage(output[0], "output.png")
 	// compute loss
-	unet._loss = unet.lossFunc(input, target)
+	unet._loss = unet.lossFunc(output[0], target)
 	fmt.Println("[INFO] UNet Loss:", unet._loss)
 	fmt.Println("[INFO] UNet Backward:")
-	unet.Backward(input, target, unet._loss)
-	unet.Update()
+	unet.Backward(output[0], target, unet._loss)
 	unet._steps++
 	if unet._steps > unet.maxIterations || unet._loss < unet.lossTolerance {
 		unet._stop = true

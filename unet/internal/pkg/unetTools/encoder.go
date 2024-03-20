@@ -57,8 +57,8 @@ func (enc *Encoder) Forward(input []*mat64.Dense) []*mat64.Dense {
 	}
 	// Forward pass through pooling layer (there should only ever be 1)
 	for _, poolLayer := range enc.poolLayers {
-		for _, o := range input {
-			o = poolLayer.Forward(o)
+		for i, input_feat := range input {
+			input[i] = poolLayer.Forward(input_feat)
 		}
 	}
 

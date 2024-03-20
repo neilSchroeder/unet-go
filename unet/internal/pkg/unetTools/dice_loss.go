@@ -18,10 +18,10 @@ func DiceLoss(prediction, target *mat.Dense) float64 {
 
 	// Calculate intersection and union
 	for i := 0; i < len(pred); i++ {
-		if pred[i] == 1 && targ[i] == 1 {
+		if pred[i] >= 0.9 && targ[i] == 1 {
 			intersection++
 		}
-		if pred[i] == 1 || targ[i] == 1 {
+		if pred[i] >= 0.9 || targ[i] == 1 {
 			union++
 		}
 	}

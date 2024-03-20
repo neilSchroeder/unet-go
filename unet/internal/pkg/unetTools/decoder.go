@@ -20,9 +20,8 @@ type Decoder struct {
 	upsampleLayers []*ConvTransLayer
 
 	// internal params
-	_dWeights      []*mat64.Dense
-	_dBiases       []*mat64.Dense
-	_skip_features *mat64.Dense
+	_dWeights []*mat64.Dense
+	_dBiases  []*mat64.Dense
 }
 
 // NewDecoder initializes a new instance of Decoder
@@ -49,7 +48,7 @@ func NewDecoder(convParams []ConvParams, upsampleParams []ConvTransParams) *Deco
 }
 
 // Forward performs a forward pass through the Decoder
-func (dec *Decoder) Forward(input []*mat64.Dense, skip_features []*mat64.Dense) *mat64.Dense {
+func (dec *Decoder) Forward(input []*mat64.Dense, skip_features []*mat64.Dense) []*mat64.Dense {
 	// upsample input
 	for _, upsampleLayer := range dec.upsampleLayers {
 		// Forward pass through upsampling layer
@@ -60,41 +59,31 @@ func (dec *Decoder) Forward(input []*mat64.Dense, skip_features []*mat64.Dense) 
 	// if there are no skip features, then just return the output
 	if skip_features != nil {
 		// resize skip_features to have the same size as the output
-		rows, cols := output.Dims()
-		for _, skip_feature := range skip_features {
-			skip_feature = ResizeMatrix(skip_feature, rows, cols)
+		rows, cols := input[0].Dims()
+		for i, skip_feature := range skip_features {
+			skip_features[i] = ResizeMatrix(skip_feature, rows, cols)
 		}
 
 		// concatenate the output with the skip_features
-		for _, skip_feature := range skip_features {
-			append(output, skip_feature)
-		}
+		input = append(input, skip_features...)
 	}
 	// pass through convolutional layers
 	for _, conv := range dec.convLayers {
-		output = conv.Forward(output)
+		input = conv.Forward(input)
 	}
-	fmt.Println(output)
-	return output
+	return input
 }
 
 // Backward performs a backward pass through the Decoder
-func (dec *Decoder) Backward(outputGrad *mat64.Dense) {
+func (dec *Decoder) Backward(outputGrad *mat64.Dense, learningRate float64) {
 	// Declare variables for accumulating gradients
-	for i, cl := range dec.convLayers {
+	for i := len(dec.convLayers) - 1; i >= 0; i-- {
 		// Backward pass through convolutional layer
-		dWeights, dBiases := cl.Backward(outputGrad)
-		dec._dWeights[i] = dWeights
-		dec._dBiases[i] = dBiases
+		dec.convLayers[i].Backward(outputGrad, learningRate)
 	}
-}
-
-// Update updates the weights and biases of the Decoder using the accumulated
-// gradients and the learning rate
-func (dec *Decoder) Update(learningRate float64) {
-	for i, cl := range dec.convLayers {
-		// Update weights and biases of convolutional layer
-		cl.UpdateWeightsAndBiases(learningRate, dec._dWeights[i], dec._dBiases[i])
+	for i := len(dec.upsampleLayers) - 1; i >= 0; i-- {
+		// Backward pass through upsampling layer
+		dec.upsampleLayers[i].Backward(outputGrad, learningRate)
 	}
 }
 

@@ -95,22 +95,22 @@ func (cl *ConvLayer) Convolve(input, weights, biases *mat64.Dense) *mat64.Dense 
 
 // Forward performs a forward pass through the ConvLayer
 func (cl *ConvLayer) Forward(input []*mat64.Dense) []*mat64.Dense {
-	copy(cl._input, input)
+	cl._input = input
 	layer_out := make([]*mat64.Dense, cl.NumFilters)
 
 	for i := 0; i < cl.NumFilters; i++ {
 		for j := 0; j < len(input); j++ {
 			if j == 0 {
-				layer_out[i] = cl.Convolve(input[i], cl.Weights[i], cl.Biases[i])
+				layer_out[i] = cl.Convolve(input[j], cl.Weights[i], cl.Biases[i])
 			} else {
-				layer_out[i].Add(layer_out[i], cl.Convolve(input[i], cl.Weights[i], cl.Biases[i]))
+				layer_out[i].Add(layer_out[i], cl.Convolve(input[j], cl.Weights[i], cl.Biases[i]))
 			}
 		}
 		layer_out[i].Scale(1.0/float64(len(input)), layer_out[i])
 		applyActivation(layer_out[i], cl.Activation)
 	}
 
-	copy(cl._output, layer_out)
+	cl._output = layer_out
 	return layer_out
 }
 
@@ -119,24 +119,56 @@ func (cl *ConvLayer) Forward(input []*mat64.Dense) []*mat64.Dense {
 // and returns the gradient of the input matrix, the gradient of the Weights matrix,
 // and the gradient of the biases matrix.
 func (cl *ConvLayer) Backward(outputGrad *mat.Dense, learningRate float64) {
-
-	// Compute gradients of the loss with respect to weights and biases
+	// Iterate over each location in the output gradient
+	fmt.Println("In ConvLayer.Backward:")
+	fmt.Printf("OutputGrad size: %d x %d\n", outputGrad.RawMatrix().Rows, outputGrad.RawMatrix().Cols)
+	fmt.Printf("Input size:      %d x %d\n", cl._input[0].RawMatrix().Rows, cl._input[0].RawMatrix().Cols)
 	for i := 0; i < cl.NumFilters; i++ {
-		// Compute gradients with respect to weights
-		gradWeights := mat64.NewDense(cl.KernelSize, cl.KernelSize*cl.InputChannels, nil)
+		// Initialize gradients of weights and biases
 
-		// Compute gradients with respect to biases
-		gradBiases := mat.NewDense(1, 1, nil)
-		gradBiases.Apply(func(_, _ int, v float64) float64 { return v }, cl.Biases[i])
+		gradWeights := make([]*mat64.Dense, len(cl._input))
+		gradBiases := mat64.NewDense(1, 1, nil)
+		for j := 0; j < len(cl._input); j++ {
+			gradWeights[j] = mat64.NewDense(cl.KernelSize, cl.KernelSize, nil)
+		}
+
+		// Iterate over each location in the output gradient
+		for outX := 0; outX < outputGrad.RawMatrix().Rows; outX++ {
+			for outY := 0; outY < outputGrad.RawMatrix().Cols; outY++ {
+				// Compute the gradients for each weight in the kefrnel
+				for x := 0; x < cl.KernelSize; x++ {
+					for y := 0; y < cl.KernelSize; y++ {
+						for c := 0; c < len(cl._input); c++ {
+							// Compute the gradient of the loss with respect to this weight
+							gradWeights[c].Set(x, y, gradWeights[c].At(x, y)+
+								outputGrad.At(outX, outY)*cl._input[c].At(outX+x, outY+y))
+						}
+					}
+				}
+				// Accumulate gradients for biases
+				gradBiases.Set(0, 0, gradBiases.At(0, 0)+outputGrad.At(outX, outY))
+			}
+		}
 
 		// Update weights and biases using AdamW optimizer
-		cl.UpdateWeightsAndBiases(i, learningRate, gradWeights, gradBiases)
+		fmt.Println("weights before:", cl.Weights[i])
+		for c := 0; c < len(cl._input); c++ {
+			cl.UpdateWeightsAndBiases(i, learningRate, gradWeights[c], gradBiases)
+		}
+		fmt.Println("weights after:", cl.Weights[i])
 	}
+	// resize gradOutput to have the same size as the input
+	*outputGrad = *ResizeMatrix(outputGrad, cl._input[0].RawMatrix().Rows, cl._input[0].RawMatrix().Cols)
 }
 
 // UpdateWeightsAndBiases updates the Weights and biases of the convolutional layer using AdamW optimizer
 // This function gets called after all the gradients have been computed and accumulated.
 func (cl *ConvLayer) UpdateWeightsAndBiases(filterIndex int, learningRate float64, gradWeights, gradBiases *mat64.Dense) {
+	if learningRate == 0 {
+		// throw an error
+		errorString := "Learning rate cannot be zero"
+		panic(errorString)
+	}
 	// Compute AdamW updates for weights
 	cl.mWeights.Apply(func(i, j int, v float64) float64 {
 		return cl.beta1*v + (1-cl.beta1)*gradWeights.At(i, j)
@@ -153,10 +185,11 @@ func (cl *ConvLayer) UpdateWeightsAndBiases(filterIndex int, learningRate float6
 		return v / (1 - math.Pow(cl.beta2, float64(cl.t+1)))
 	}, cl.vWeights)
 	weightUpdate := mat.NewDense(gradWeights.RawMatrix().Rows, gradWeights.RawMatrix().Cols, nil)
-	weightUpdate.Apply(func(i, j int, v float64) float64 {
-		return learningRate * v / (math.Sqrt(vHat.At(i, j)) + cl.epsilon)
-	}, mHat)
-
+	for i := 0; i < gradWeights.RawMatrix().Rows; i++ {
+		for j := 0; j < gradWeights.RawMatrix().Cols; j++ {
+			weightUpdate.Set(i, j, learningRate*mHat.At(i, j)/(math.Sqrt(vHat.At(i, j))+cl.epsilon))
+		}
+	}
 	// Update weights
 	cl.Weights[filterIndex].Sub(cl.Weights[filterIndex], weightUpdate)
 

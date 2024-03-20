@@ -32,10 +32,6 @@ func (mpl *MaxPoolLayer) Forward(input *mat64.Dense) *mat64.Dense {
 	outputRows := (inputRows-mpl.poolSize)/mpl.stride + 1
 	outputCols := (inputCols-mpl.poolSize)/mpl.stride + 1
 	output := mat64.NewDense(outputRows, outputCols, nil)
-	r, c := output.Dims()
-	ir, ic := input.Dims()
-	fmt.Printf("input: %d x %d\n", ir, ic)
-	fmt.Printf("output: %d x %d\n", r, c)
 
 	for i := 0; i < outputRows; i++ {
 		for j := 0; j < outputCols; j++ {

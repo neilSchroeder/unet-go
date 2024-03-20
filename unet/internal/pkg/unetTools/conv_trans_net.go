@@ -72,29 +72,6 @@ func NewConvTransLayer(InputChannels, KernelSize, Stride, NumFilters int, Activa
 
 }
 
-func (ctl *ConvTransLayer) Convolve(input, weights, biases *mat64.Dense) *mat64.Dense {
-	inputRows, inputCols := input.Dims()
-	weightsRows, weightsCols := weights.Dims()
-	outputRows := inputRows - weightsRows + 1
-	outputCols := inputCols - weightsCols + 1
-	output := mat64.NewDense(outputRows, outputCols, nil)
-
-	for i := 0; i < outputRows; i++ {
-		for j := 0; j < outputCols; j++ {
-			sum := 0.0
-			for m := 0; m < weightsRows; m++ {
-				for n := 0; n < weightsCols; n++ {
-					sum += input.At(i+m, j+n) * weights.At(m, n)
-				}
-			}
-			sum /= float64(weightsRows * weightsCols)
-			output.Set(i, j, sum+biases.At(0, 0))
-		}
-	}
-
-	return output
-}
-
 // Forward performs a forward pass through the ConvTransLayer
 func (ctl *ConvTransLayer) Forward(input []*mat64.Dense) []*mat64.Dense {
 	copy(ctl._input, input)
@@ -103,9 +80,9 @@ func (ctl *ConvTransLayer) Forward(input []*mat64.Dense) []*mat64.Dense {
 	for i := 0; i < ctl.NumFilters; i++ {
 		for j := 0; j < len(input); j++ {
 			if j == 0 {
-				layer_out[i] = ctl.Convolve(input[i], ctl.Weights[i], ctl.Biases[i])
+				layer_out[i] = ctl.TransverseConvolve(input[i], ctl.Weights[i], ctl.Biases[i])
 			} else {
-				layer_out[i].Add(layer_out[i], ctl.Convolve(input[i], ctl.Weights[i], ctl.Biases[i]))
+				layer_out[i].Add(layer_out[i], ctl.TransverseConvolve(input[i], ctl.Weights[i], ctl.Biases[i]))
 			}
 		}
 		layer_out[i].Scale(1.0/float64(len(input)), layer_out[i])
@@ -115,6 +92,11 @@ func (ctl *ConvTransLayer) Forward(input []*mat64.Dense) []*mat64.Dense {
 	// Apply Activation function
 	copy(ctl._output, layer_out)
 	return layer_out
+}
+
+func (ctl *ConvTransLayer) Convolve(input, kernel, bias *mat64.Dense) *mat64.Dense {
+	// performs a convolution with a matrix of size ctl.KernelSize x ctl.KernelSize
+	// and stride ctl.Stride
 }
 
 func (ctl *ConvTransLayer) TransverseConvolve(input, kernel, bias *mat64.Dense) *mat64.Dense {
@@ -147,9 +129,21 @@ func (ctl *ConvTransLayer) TransverseConvolve(input, kernel, bias *mat64.Dense) 
 // It takes the gradient of the output matrix as input,
 // and returns the gradient of the input matrix, the gradient of the Weights matrix,
 // and the gradient of the biases matrix.
-func (ctl *ConvTransLayer) Backward(gradOutput *mat64.Dense) (*mat64.Dense, *mat64.Dense) {
-	// TODO fix this
-	return gradOutput, gradOutput
+func (ctl *ConvTransLayer) Backward(gradOutput *mat64.Dense, learningRate float64) {
+
+	// iterate over all filters
+	// for i := 0; i < ctl.NumFilters; i++ {
+	// 	// compute the gradient of the input
+	// 	gradInput := mat64.NewDense(ctl.InputChannels, ctl.KernelSize, nil)
+	// 	gradInput = ctl.TransverseConvolve(gradOutput, ctl.Weights[i], mat64.NewDense(1, 1, nil))
+
+	// 	// compute the gradient of the weights
+	// 	var gradWeights []*mat64.Dense
+	// 	for j := 0; j < ctl.InputChannels; j++ {
+
+	// 	}
+	gradOutput =
+
 }
 
 // UpdateWeightsAndBiases updates the Weights and biases of the convolutional layer using AdamW optimizer

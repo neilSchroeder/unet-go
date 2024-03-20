@@ -3,10 +3,12 @@ package unetTools
 import (
 	"fmt"
 	"image"
+	"image/color"
 	"image/jpeg"
 	"math"
 	"math/rand"
 	"os"
+	"slices"
 
 	"github.com/gonum/matrix/mat64"
 	mat "github.com/gonum/matrix/mat64"
@@ -127,6 +129,66 @@ func LoadImage(filePath string) *mat64.Dense {
 	ret.Scale(1/255.0, ret)
 
 	return ret
+}
+
+func SaveImage(input *mat64.Dense, filePath string) {
+	// Create a new grayscale image
+	rows, cols := input.Dims()
+	grayImg := mat.NewDense(rows, cols, nil)
+	max_val := slices.Max(input.RawMatrix().Data)
+	min_val := slices.Min(input.RawMatrix().Data)
+	grayImg.Scale(255.0/(max_val-min_val), input)
+
+	// Convert the matrix to an image
+	img := image.NewGray(image.Rect(0, 0, cols, rows))
+	for y := 0; y < rows; y++ {
+		for x := 0; x < cols; x++ {
+			val := uint8(grayImg.At(y, x))
+			img.SetGray(x, y, color.Gray{val})
+		}
+	}
+
+	// Create the output file
+	file, err := os.Create(filePath)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+	defer file.Close()
+
+	// Encode the grayscale image to JPEG
+	jpeg.Encode(file, img, nil)
+}
+
+func MatrixToSlice(matrix *mat64.Dense) []float64 {
+	rows, cols := matrix.Dims()
+	ret := []float64{}
+	for i := 0; i < rows; i++ {
+		for j := 0; j < cols; j++ {
+			ret = append(ret, matrix.At(i, j))
+		}
+	}
+	return ret
+}
+
+func MaxOfSlice(slice []float64) float64 {
+	max := slice[0]
+	for _, val := range slice {
+		if val > max {
+			max = val
+		}
+	}
+	return max
+}
+
+func MinOfSlice(slice []float64) float64 {
+	min := slice[0]
+	for _, val := range slice {
+		if val < min {
+			min = val
+		}
+	}
+	return min
 }
 
 // ResizeMatrix resizes a matrix using bilinear interpolation

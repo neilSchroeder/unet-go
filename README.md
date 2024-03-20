@@ -43,3 +43,8 @@ The UNet-go project is licensed under the [MIT License](https://opensource.org/l
 You are free to use, modify, and distribute this project under the terms of the MIT License. This license allows you to use the project for personal or commercial purposes, as long as you include the original copyright notice and disclaimer.
 
 For more information about the MIT License, please refer to the [LICENSE](LICENSE) file in the root of the project.
+
+
+## Notes
+
+The only way for this whole skip connections business to make sense is to apply every filter in every layer to every output feature map in every output. It's a mess and whoever managed to make this happen quickly is a genius, but we can do it.
